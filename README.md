@@ -1,6 +1,8 @@
 # Accurate Online MCP Server (Read-Only)
 
-**Accurate Online MCP Server** adalah implementasi [Model Context Protocol (MCP)](https://modelcontextprotocol.io) berbasis Node.js dan Express yang memungkinkan asisten AI (seperti Claude, Cursor, Windsurf, LangChain, Dify, dan klien MCP lainnya) untuk mengakses, membaca, menganalisis, dan me-rekap data dari **Accurate Online** secara aman dan terstruktur.
+**Accurate Online MCP Server** adalah implementasi [Model Context Protocol (MCP)](https://modelcontextprotocol.io) berbasis Node.js dan Express yang memungkinkan asisten AI (seperti Claude, Cursor, Windsurf, LangChain, Dify, dan klien MCP lainnya) untuk membaca data dari **Accurate Online** secara aman dan terstruktur.
+
+Server ini sengaja dibuat sebagai **penghubung murni** antara AI dan Accurate: ia mengambil data apa adanya dan menjamin data itu utuh (tidak terpotong, tidak parsial, tidak duplikat). **Server tidak menghitung apa pun dan tidak menulis file apa pun.** Semua perhitungan (total, rekap, laba rugi, selisih, persentase) dilakukan oleh AI.
 
 Server ini bekerja dalam mode **Hanya Baca (Read-Only)** secara mutlak. Tidak ada endpoint atau jalur logika yang dapat mengubah, menambah, atau menghapus data pada database Accurate Online Anda.
 
@@ -9,7 +11,7 @@ Server ini bekerja dalam mode **Hanya Baca (Read-Only)** secara mutlak. Tidak ad
 ## 📑 Daftar Isi
 - [Fitur Utama](#fitur-utama)
 - [Daftar Tools MCP](#daftar-tools-mcp)
-- [Mekanisme Perhitungan (`accurate_aggregate`)](#mekanisme-perhitungan-accurate_aggregate)
+- [Keutuhan Data & Perhitungan](#keutuhan-data--perhitungan)
 - [Jaminan Keamanan Read-Only Berlapis](#jaminan-keamanan-read-only-berlapis)
 - [Persyaratan Sistem & Dependensi](#persyaratan-sistem--dependensi)
 - [Panduan Integrasi Kredensial Accurate](#panduan-integrasi-kredensial-accurate)
@@ -24,60 +26,61 @@ Server ini bekerja dalam mode **Hanya Baca (Read-Only)** secara mutlak. Tidak ad
 
 ## 🌟 Fitur Utama
 
-- **Netral Terhadap Klien AI**: Dapat disambungkan ke AI Agent / LLM Client apa pun yang mendukung protokol MCP (Stdio maupun HTTP/SSE).
-- **Enforement Read-Only Mutlak**: Memvalidasi seluruh permintaan terhadap OpenAPI spec resmi Accurate untuk memastikan hanya method `GET` dan scope `*_view` yang diizinkan.
-- **Engine Aggregation Presisi Tinggi**: Menggunakan aritmatika berbasis `BigInt` untuk menghindari kesalahan pembulatan desimal saat melakukan kalkulasi agregasi/laporan keuangan.
-- **Auto-Discovery Endpoint**: Dilengkapi fitur pencarian OpenAPI spec terintegrasi sehingga AI Agent dapat menemukan endpoint yang relevan secara mandiri.
-- **Rate-Limiting & Protection**: Menjaga stabilitas koneksi API dengan membatasi proses paralel sesuai kuota Accurate.
+- **Netral Terhadap Klien AI**: Dapat disambungkan ke AI Agent / LLM Client apa pun yang mendukung protokol MCP (Stdio maupun HTTP).
+- **Read-Only Mutlak ke Accurate**: Hanya endpoint baca resmi (method `GET`, scope `*_view`) dari spesifikasi OpenAPI Accurate yang bisa dipanggil. Klien HTTP-nya bahkan tidak punya jalur untuk mengirim request tulis.
+- **Penghubung Murni**: Tidak ada logika perhitungan dan tidak ada penulisan file. Data dikirim apa adanya ke AI.
+- **Jaminan Keutuhan Data**: Data parsial, duplikat, atau jumlah baris yang tidak cocok ditandai `PERINGATAN`. Respons yang terlalu besar ditolak utuh, bukan dipotong diam-diam.
+- **Auto-Discovery Endpoint**: Pencarian spesifikasi OpenAPI terintegrasi sehingga AI dapat menemukan endpoint yang relevan secara mandiri.
+- **Rate-Limiting & Retry**: Maks. 4 request paralel, dan GET diulang otomatis saat Accurate membalas 429/502/503/504.
 
 ---
 
 ## 🛠️ Daftar Tools MCP
 
-Server menyediakan 4 tools utama yang dapat dipanggil oleh AI Client:
+Server menyediakan 3 tools:
 
 | Tool | Deskripsi & Fungsi |
 |---|---|
-| `search_endpoints` | Mencari endpoint BACA pada spesifikasi OpenAPI Accurate berdasarkan kata kunci, modul, atau parameter. |
-| `accurate_get` | Mengambil/melihat raw data dari satu endpoint Accurate (dukungan multi-halaman via `all_pages`). |
-| `accurate_aggregate` | Melakukan pemrosesan, agregasi, pengelompokan, dan perhitungan data secara aman di server MCP tanpa membebankan konteks LLM. |
-| `check_connection` | Menguji status validasi token API, signature secret, serta keterhubungan ke host Accurate. |
+| `search_endpoints` | Mencari endpoint BACA pada spesifikasi OpenAPI Accurate berdasarkan kata kunci, modul, atau path. |
+| `accurate_get` | Mengambil data dari satu endpoint baca (detail dokumen, daftar transaksi, akun laba rugi). Mendukung semua halaman sekaligus via `all_pages`. |
+| `check_connection` | Menguji token API, signature secret, dan keterhubungan ke host Accurate. |
 
 ---
 
-## 📊 Mekanisme Perhitungan (`accurate_aggregate`)
+## 📊 Keutuhan Data & Perhitungan
 
-Seluruh kalkulasi dilakukan langsung di dalam kode server MCP (Server-Side Calculation), bukan diestimasi atau dihitung manual oleh model LLM.
+Server tidak menghitung. Tugasnya memastikan data yang diterima AI **utuh**:
 
-- **Operasi Agregasi**: `count`, `count_distinct`, `sum`, `avg`, `min`, `max`.
-- **Pengelompokan (Group By)**: Berdasarkan field spesifik (misal: `vendor.name`) atau rentang waktu (`bucket`: `month`/`year`).
-- **Penyaringan Data (Filter)**: Mendukung operator `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `contains`.
-- **Signed By Metrics**: Perhitungan berbobot otomatis (misal: memberikan bobot `+1` pada akun Pendapatan dan `-1` pada Beban/HPP untuk menghitung Laba Bersih secara otomatis).
-- **Aritmatika Presisi Tinggi**: Pengolahan angka menggunakan skema `BigInt` (menghindari bug floating point `0.1 + 0.2 = 0.30000000000000004`).
+1. **Penanda data parsial**: `accurate_get` dengan `all_pages` mengambil semua halaman, lalu mencocokkan jumlah baris dengan `rowCount` dari Accurate. Bila data tidak lengkap atau ada `id` duplikat, respons diberi `PERINGATAN` agar tidak dijumlahkan.
+2. **Tidak ada pemotongan diam-diam**: respons di atas 100.000 karakter ditolak dengan pesan jelas, bukan dipotong, agar AI tidak menghitung dari setengah data.
+3. **Penanda halaman**: bila `accurate_get` tanpa `all_pages` hanya mengembalikan halaman pertama dari beberapa halaman, respons diberi `CATATAN` agar tidak dijumlahkan sebagai total.
 
-### Pengaman Validasi Data:
-1. **Ditolak Jika Parsial**: Permintaan agregasi ditolak otomatis jika data tidak lengkap (melebihi `max_pages`) atau terdapat duplikasi ID, kecuali parameter `allow_partial=true` diaktifkan secara eksplisit.
-2. **Audit Peringatan**: Nilai kosong, non-numerik, atau format ambiguous (seperti `"1.000"`) akan dikecualikan dari kalkulasi dan dicatat pada array `peringatan`.
-3. **Integritas Tampilan**: Properti `total` mencakup keseluruhan populasi data meskipun hasil tampilan dibatasi oleh parameter `limit`.
+Cara menghitung yang disarankan:
+- **Data kecil** (laba rugi per akun dari `glaccount/get-pl-account-amount.do`, detail satu faktur): `accurate_get`, lalu AI menyusun hasilnya.
+- **Data banyak** (rekap faktur, per pelanggan/vendor/bulan): `accurate_get` dengan `all_pages=true` dan `fields` seperlunya, dipecah per periode bila terlalu besar. AI sebaiknya menghitung **dengan kode** (mis. Claude Code menjalankan skrip Python/Node). Menjumlahkan ratusan angka "di kepala" oleh LLM tidak dapat diandalkan.
+
+---
 
 ---
 
 ## 🛡️ Jaminan Keamanan Read-Only Berlapis
 
-Server mengintegrasikan **6 lapisan pengaman** untuk menjamin data Anda tidak dapat diubah:
+Server mengintegrasikan beberapa lapisan pengaman. Gagal di salah satu lapisan = request ditolak sebelum dikirim (*fail closed*):
 
-1. **Restriksi Method HTTP**: Server hanya mengeksekusi metode `HTTP GET` ke API Accurate.
-2. **Whitelist Spesifikasi Resmi**: Endpoint yang dapat diakses diwajibkan terdaftar pada spesifikasi OpenAPI Accurate dengan kriteria berakhiran `_view`. Endpoint bertipe `save.do`, `delete.do`, `bulk-save.do`, atau scope `*_save`/`*_delete` diblokir penuh.
-3. **Validasi Strict Path & Keyword**: Path divalidasi ketat (pola regex). Kata kunci yang teridentifikasi sebagai operasi tulis (`save`, `update`, `approve`, dll) akan langsung ditolak.
-4. **Isolasi Domain & Redirect**: Host terkunci ke `*.accurate.id` dan redirect HTTP ditolak keluar dari domain Accurate.
-5. **Enkapsulasi Engine**: Tool `accurate_aggregate` hanya memproses data read-only yang sudah ditarik dan tidak memiliki instruksi penulisan.
-6. **Prinsip Hak Akses Terkecil (Least Privilege)**: Token API dianjurkan dibangkitkan dari akun pengguna Accurate berkategori **Operator (View Only)**.
+1. **Tidak ada jalur tulis di klien HTTP**: semua request data adalah `GET`. Satu-satunya `POST` adalah `api-token.do` (cek token & cari host) dengan URL tetap dan tanpa body. Fungsi request mentah tidak diekspor.
+2. **Whitelist dari spesifikasi resmi**: endpoint harus terdaftar di OpenAPI Accurate dengan operasi `GET`, berada di server data usaha, dan **semua** scope-nya berakhiran `_view`.
+3. **Validasi path & kata kunci**: path divalidasi regex. Nama operasi yang mengandung kata tulis (`save`, `delete`, `update`, `approve`, `void`, dll.) ditolak walaupun ada di whitelist.
+4. **Validasi parameter**: hanya nilai skalar sederhana. Parameter pengganti metode (`_method`, `X-HTTP-Method-Override`, dll.) ditolak.
+5. **Isolasi domain & redirect**: host terkunci ke `*.accurate.id` dengan HTTPS. Hanya redirect 308 ke domain Accurate yang diikuti; redirect lain ditolak sehingga token tidak bocor.
+6. **Prinsip hak akses terkecil (wajib dilakukan pengguna)**: buat API Token dari user **Operator dengan Akses Grup khusus lihat**, dan centang **hanya scope `*_view`** saat membuat token. Ini lapisan terkuat karena ditegakkan oleh Accurate sendiri, bahkan jika kode server ini diubah.
+
+Lapisan 1–5 dicakup oleh test otomatis (`npm test`).
 
 ---
 
 ## 💻 Persyaratan Sistem & Dependensi
 
-- **Node.js**: Versi `20.6.0` atau yang lebih baru (mendukung flag `--env-file`).
+- **Node.js**: Versi `20.6.0` atau yang lebih baru (mendukung flag `--env-file`). Flag `--use-system-ca` membutuhkan Node.js 22.15+ / 23.8+.
 - **NPM**: Versi 9.x atau lebih baru.
 - **Accurate Online Account**: Akses ke database Accurate Online dan hak akses API Developer.
 
@@ -103,6 +106,7 @@ Server mengintegrasikan **6 lapisan pengaman** untuk menjamin data Anda tidak da
      ```env
      ACCURATE_BEARER_TOKEN=token_anda_di_sini
      ACCURATE_API_SECRET=signature_secret_anda_di_sini
+     MCP_AUTH_TOKEN=token_acak_untuk_mode_http
      PORT=3000
      ```
 
@@ -121,7 +125,7 @@ npm install
 # 3. Salin dan sesuaikan variabel lingkungan
 cp .env.example .env
 
-# 4. Jalankan pengujian keamanan & unit test (31+ test suite)
+# 4. Jalankan pengujian keamanan & unit test
 npm test
 
 # 5. Jalankan MCP Server
@@ -202,8 +206,9 @@ Setelah terhubung dengan AI Client, Anda dapat menanyakan hal-hal seperti:
 ## ⚠️ Batasan Teknis
 
 * **Struktur Response**: Spesifikasi OpenAPI Accurate tidak secara detail mendefinisikan skema JSON response pada setiap endpoint. AI Agent akan mempelajari struktur data berdasarkan panggilan pertama.
-* **Kapasitas Halaman**: Satu kali permintaan dialokasikan maksimal 50 halaman (sekitar 5.000 baris data). Filter tanggal sangat dianjurkan untuk data berukuran besar.
-* **Pemotongan Karakter**: Hasil respons yang melebihi 100.000 karakter akan dipotong (truncated) untuk menjaga stabilitas memori LLM. Gunakan fitur `fields`, `limit`, atau `accurate_aggregate`.
+* **Kapasitas Halaman**: `accurate_get` dengan `all_pages` maks. 50 halaman (100 baris/halaman). Untuk data lebih besar, ambil per periode (mis. per bulan).
+* **Batas Respons**: Respons di atas 100.000 karakter (JSON ringkas) ditolak, bukan dipotong. Gunakan `fields` seperlunya dan persempit filter/periode.
+* **Perhitungan oleh AI**: Ketelitian angka bergantung pada AI. Gunakan klien yang bisa menjalankan kode untuk data banyak.
 * **Batas Kuota Accurate**: Default rate limit Accurate adalah 8 request/detik dan 8 proses paralel per API Token (server dibatasi maks 4 proses paralel).
 
 ---
@@ -224,5 +229,5 @@ Dengan mengunduh, menginstal, atau menggunakan **Accurate MCP Server** ini, Anda
 
 1. **Tidak Berafiliasi Resmi**: Proyek ini adalah proyek independen dan **TIDAK berafiliasi, didukung, disponsori, atau dihubungkan secara resmi dengan PT Cipta Piranti Sejahtera (CPSSoft) atau merek terdaftar Accurate Online**. Nama "Accurate", "Accurate Online", serta logo terkait adalah hak milik sah dari pemiliknya masing-masing.
 2. **Tidak Ada Garansi (As-Is)**: PERANGKAT LUNAK INI DISEDIAKAN "SEBAGAIMANA ADANYA" (*AS IS*), TANPA JAMINAN APA PUN, BAIK TERSURAT MAUPUN TERSIRAT, TERMASUK NAMUN TIDAK TERBATAS PADA JAMINAN KELAYAKAN JUAL, KESESUAIAN UNTUK TUJUAN TERTENTU, SERTA KETIADAAN PELANGGARAN.
-3. **Penyangkalan Hasil Laporan Keuangan**: Perhitungan agregasi, pencocokan akun Laba Rugi, beban, dan pos akun lainnya yang dihasilkan melalui server ini merupakan estimasi matematis berdasarkan data yang ditarik via API. **Hasil kalkulasi harus selalu dicocokkan dan diverifikasi kembali dengan Laporan Keuangan Resmi di dalam sistem Accurate Online sebelum digunakan untuk keputusan bisnis, audit, atau perpajakan.**
+3. **Penyangkalan Hasil Laporan Keuangan**: Server ini tidak menghitung. Seluruh perhitungan (rekap, Laba Rugi, beban, dan pos akun lainnya) dilakukan oleh AI berdasarkan data yang ditarik via API. **Hasil kalkulasi harus selalu dicocokkan dan diverifikasi kembali dengan Laporan Keuangan Resmi di dalam sistem Accurate Online sebelum digunakan untuk keputusan bisnis, audit, atau perpajakan.**
 4. **Pembatasan Tanggung Jawab**: Dalam kondisi apa pun, pembuat, kontributor, atau pemegang hak cipta software ini TIDAK BERTANGGUNG JAWAB atas klaim, kerugian, kerusakan, atau tuntutan lain (baik langsung, tidak langsung, insidental, atau konsekuensial) yang timbul dari penggunaan, ketidakmampuan penggunaan, atau tindakan yang diambil berdasarkan data yang dihasilkan oleh perangkat lunak ini.

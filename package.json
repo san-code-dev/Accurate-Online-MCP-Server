@@ -1,6 +1,6 @@
 {
   "name": "accurate-mcp",
-  "version": "0.1.0",
+  "version": "0.5.0",
   "description": "MCP server (read-only) untuk Accurate Online, berbasis Express",
   "type": "module",
   "main": "server.js",

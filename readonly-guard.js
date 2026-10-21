@@ -36,13 +36,17 @@ export function assertSafeShape(path) {
   }
 }
 
-/** Validasi query agar hanya berisi parameter sederhana (tidak bisa menyisipkan path/header). */
+// Parameter yang di beberapa framework web dipakai untuk mengganti metode HTTP (GET -> POST/DELETE).
+const METHOD_OVERRIDE = /^(_?method|x-http-method(-override)?|x-method-override)$/i;
+
+/** Validasi query agar hanya berisi parameter sederhana (tidak bisa menyisipkan path/header/metode). */
 export function sanitizeQuery(query) {
   const out = {};
   const entries = Object.entries(query ?? {});
   if (entries.length > 60) throw new Error("Terlalu banyak parameter query (maks. 60).");
   for (const [k, v] of entries) {
     if (!/^[A-Za-z0-9_.\[\]-]{1,80}$/.test(k)) throw new Error(`Nama parameter tidak valid: '${k}'`);
+    if (METHOD_OVERRIDE.test(k)) throw new Error(`Diblokir: parameter '${k}' tidak diizinkan (server read-only).`);
     if (!["string", "number", "boolean"].includes(typeof v)) throw new Error(`Nilai parameter '${k}' harus string/angka/boolean.`);
     const s = String(v);
     if (s.length > 500 || /[\u0000-\u001f]/.test(s)) throw new Error(`Nilai parameter '${k}' tidak valid.`);
