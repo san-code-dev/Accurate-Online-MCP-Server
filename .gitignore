@@ -43,3 +43,6 @@ out/
 # System files
 .DS_Store
 Thumbs.db
+
+# Hasil paket ekstensi Claude Desktop
+extension/dist/

@@ -180,6 +180,18 @@ claude mcp add --transport http accurate [http://127.0.0.1:3000/mcp](http://127.
 
 ```
 
+### Komputer lain di jaringan kantor (ekstensi `.mcpb`, tanpa instal Node.js)
+
+Server dijalankan di satu komputer dengan `npm start` (`HOST=0.0.0.0`, port bebas mis. `PORT=3030`, firewall dibuka untuk port itu).
+Komputer lain cukup memasang **Claude Desktop** lalu ekstensi penghubung:
+
+1. Buat paketnya (sekali, di komputer server): `npx @anthropic-ai/mcpb pack extension extension/dist/accurate-kantor.mcpb`
+2. Bagikan file `accurate-kantor.mcpb`. Isinya hanya penghubung (2 file, tanpa kode/token Accurate).
+3. Di komputer lain: klik dua kali file tersebut di Claude Desktop, pilih **Install**, isi **Alamat server MCP** dan **Token MCP** (= `MCP_AUTH_TOKEN` server).
+
+Node.js tidak perlu diinstal karena Claude Desktop membawa runtime-nya sendiri untuk ekstensi. Bila ekstensi gagal tersambung,
+pesan error di Claude menjelaskan penyebabnya (token ditolak, server mati, komputer server tidak terjangkau).
+
 ### 3. Cursor / Windsurf / VS Code Extensions (Continue, dll.)
 
 Tambahkan MCP Server pada pengaturan ekstensi masing-masing:
