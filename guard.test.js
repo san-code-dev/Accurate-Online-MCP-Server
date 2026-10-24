@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildCatalog, assertAllowed, normalizePath, isSafeShape, sanitizeQuery, searchCatalog, listModules, describeEndpoint,
-} from ".cl/readonly-guard.js";
+} from "./readonly-guard.js";
 
 const DATA = [{ url: "https://{cloudServerCode}.accurate.id/accurate" }];
 const BASE = [{ url: "https://account.accurate.id" }];
@@ -76,6 +76,9 @@ test("sanitizeQuery menolak kunci/nilai berbahaya", () => {
   assert.throws(() => sanitizeQuery({ a: { x: 1 } }));
   assert.throws(() => sanitizeQuery({ a: "x\ny" }));
   assert.throws(() => sanitizeQuery(Object.fromEntries(Array.from({ length: 61 }, (_, i) => [`k${i}`, 1]))));
+  for (const k of ["_method", "method", "X-HTTP-Method-Override", "x-method-override"]) {
+    assert.throws(() => sanitizeQuery({ [k]: "DELETE" }), /Diblokir/);
+  }
 });
 
 test("pencarian, daftar modul, dan detail parameter", () => {

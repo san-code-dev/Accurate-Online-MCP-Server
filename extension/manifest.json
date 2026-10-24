@@ -1,0 +1,51 @@
+{
+  "manifest_version": "0.2",
+  "name": "accurate-kantor",
+  "display_name": "Accurate (Kantor)",
+  "version": "1.0.0",
+  "description": "Akses BACA-SAJA ke data Accurate Online lewat MCP server kantor.",
+  "long_description": "Menghubungkan Claude Desktop ke MCP server Accurate yang berjalan di jaringan kantor. Ekstensi ini hanya penghubung: tidak berisi kode atau token Accurate, dan server hanya mengizinkan membaca data (tidak bisa menambah, mengubah, atau menghapus).",
+  "author": {
+    "name": "BoneDeath"
+  },
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/server/index.js"
+      ],
+      "env": {
+        "MCP_URL": "${user_config.server_url}",
+        "MCP_TOKEN": "${user_config.token}"
+      }
+    }
+  },
+  "tools": [
+    { "name": "check_connection", "description": "Cek koneksi dan nama database Accurate yang terhubung." },
+    { "name": "search_endpoints", "description": "Cari endpoint baca Accurate yang tersedia." },
+    { "name": "accurate_get", "description": "Ambil data dari endpoint baca Accurate." }
+  ],
+  "user_config": {
+    "server_url": {
+      "type": "string",
+      "title": "Alamat server MCP",
+      "description": "Alamat MCP server kantor, mis. http://192.168.10.65:3030/mcp",
+      "default": "http://192.168.10.65:3030/mcp",
+      "required": true
+    },
+    "token": {
+      "type": "string",
+      "title": "Token MCP",
+      "description": "Token akses MCP server kantor (minta ke admin). Disimpan aman oleh Claude Desktop.",
+      "sensitive": true,
+      "required": true
+    }
+  },
+  "compatibility": {
+    "platforms": ["win32", "darwin"],
+    "runtimes": { "node": ">=18.0.0" }
+  },
+  "license": "MIT"
+}

@@ -15,7 +15,7 @@ import {
   searchCatalog,
   describeEndpoint,
 } from "./readonly-guard.js";
-import { aggregateRows, collectRows } from "./aggregate.js";
+import { collectRows } from "./fetch-all.js";
 
 // ---------------------------------------------------------------------------
 // Konfigurasi
@@ -43,7 +43,7 @@ for (const [k, v] of Object.entries(required)) {
   }
 }
 
-const MAX_OUTPUT_CHARS = 100_000; // cegah respons raksasa membanjiri konteks Claude
+const MAX_OUTPUT_CHARS = 100_000; // respons lebih besar dari ini DITOLAK (bukan dipotong diam-diam)
 const SPEC_TTL_MS = 24 * 60 * 60 * 1000;
 
 const client = createAccurateClient({
@@ -82,12 +82,16 @@ async function getCatalog() {
 // ---------------------------------------------------------------------------
 // Utilitas
 // ---------------------------------------------------------------------------
+// Data yang terpotong bisa membuat Claude menghitung dari setengah data tanpa sadar, jadi respons besar ditolak utuh.
 const toText = (data) => {
-  const s = typeof data === "string" ? data : JSON.stringify(data, null, 2);
-  return s.length > MAX_OUTPUT_CHARS
-    ? s.slice(0, MAX_OUTPUT_CHARS) +
-        `\n...[dipotong, ${s.length - MAX_OUTPUT_CHARS} karakter lagi. Persempit periode/filter atau gunakan parameter 'fields'.]`
-    : s;
+  const s = typeof data === "string" ? data : JSON.stringify(data); // ringkas (tanpa spasi) agar lebih banyak baris muat
+  if (s.length > MAX_OUTPUT_CHARS) {
+    throw new Error(
+      `Respons terlalu besar (${s.length} karakter, batas ${MAX_OUTPUT_CHARS}) dan TIDAK ditampilkan agar tidak terbaca sebagian. ` +
+        "Gunakan 'fields' agar ringkas, atau persempit filter/periode (mis. per bulan) lalu gabungkan hasilnya."
+    );
+  }
+  return s;
 };
 const ok = (data) => ({ content: [{ type: "text", text: toText(data) }] });
 
@@ -109,39 +113,40 @@ Server ini memberi akses BACA-SAJA ke data Accurate Online (database yang terhub
 Tidak ada tool untuk menambah, mengubah, atau menghapus data, dan hal itu memang tidak mungkin dilakukan lewat server ini.
 Jika pengguna meminta menulis/mengubah/menghapus data di Accurate, tolak dan jelaskan bahwa server ini read-only.
 
+Server ini hanya PENGHUBUNG: ia mengambil data apa adanya dan memastikan data itu utuh. Server TIDAK menghitung apa pun;
+semua perhitungan (total, rekap, laba rugi, selisih, persentase) adalah tugas Anda.
+
 Cara bekerja:
 1. Cari endpoint dengan search_endpoints (kata kunci bebas, mis. "faktur pembelian", "stok barang", "akun perkiraan").
    Tanpa argumen: daftar modul. Dengan argumen path: parameter lengkap endpoint itu.
-2. Untuk MELIHAT data (beberapa baris, detail satu dokumen): accurate_get. Gunakan "fields" agar hasil ringkas.
-3. Untuk MENGHITUNG apa pun (total, jumlah, rata-rata, rekap per vendor/pelanggan/bulan/akun, laba rugi): accurate_aggregate.
-   Tool ini mengambil SEMUA halaman, lalu menjumlahkan di kode dengan presisi tepat. JANGAN menjumlahkan sendiri dari hasil
-   accurate_get, dan jangan menghitung total/selisih/persentase dari ingatan.
-4. Format tanggal Accurate: dd/MM/yyyy. Filter biasanya filter.<field>.op / filter.<field>.val (lihat parameter endpoint).
+2. Ambil data dengan accurate_get. Selalu gunakan "fields" berisi hanya kolom yang dibutuhkan (plus "id") agar ringkas.
+   Untuk daftar lebih dari 100 baris gunakan all_pages=true.
+3. Bila respons ditolak karena terlalu besar, pecah per periode (mis. per bulan) dan gabungkan hasilnya.
+4. Untuk menjumlahkan banyak angka, hitung DENGAN KODE bila Anda bisa menjalankan kode. Jangan menjumlahkan
+   puluhan angka atau lebih di kepala; bila tidak bisa menjalankan kode, katakan bahwa total berisiko salah.
+5. Format tanggal Accurate: dd/MM/yyyy. Filter biasanya filter.<field>.op / filter.<field>.val (lihat parameter endpoint).
 
-Aturan accurate_aggregate:
-- Sertakan semua field yang dipakai (group_by, metrics, where) di query.fields. Sertakan juga "id" agar duplikat bisa terdeteksi.
-- Field bersarang ditulis dengan titik, mis. "vendor.name" (pastikan field induknya, mis. "vendor", ada di fields).
-- Jika tool menolak karena data tidak lengkap, naikkan max_pages atau persempit filter tanggal. Jangan memakai data parsial sebagai total.
-- Sampaikan semua isi "peringatan" kepada pengguna. Baris yang tidak ikut dihitung selalu dilaporkan di sana.
+Aturan keutuhan data:
+- Sertakan "id" di fields agar duplikat bisa terdeteksi.
+- Jangan pernah menghitung total dari data parsial (ada PERINGATAN, CATATAN, atau lengkap = false).
+- Selalu cocokkan jumlah baris yang Anda hitung dengan "baris_menurut_accurate" dan sebutkan ke pengguna.
+- Perhatikan dokumen batal/draft dan mata uang asing (field status/currency/rate) sebelum menjumlahkan.
 
-Contoh:
-- Rekap pembelian per vendor: path "purchase-invoice/list.do", query {"fields":"id,number,transDate,totalAmount,vendor"},
-  group_by ["vendor.name"], metrics [{"op":"count"},{"op":"sum","field":"totalAmount","as":"total"}].
-- Penjualan per bulan: path "sales-invoice/list.do", group_by [{"field":"transDate","bucket":"month"}], metrics sum totalAmount.
-- Laba rugi: path "glaccount/get-pl-account-amount.do", query {"fromDate":"01/01/2021","toDate":"31/12/2021"},
-  where [{"field":"isParent","op":"eq","value":false}] (WAJIB, agar akun induk tidak terhitung dua kali), group_by ["accountType"],
-  metrics [{"op":"sum","field":"amount","as":"jumlah"},{"op":"sum","field":"amount","as":"laba_bersih","signed_by":
-  {"field":"accountType","map":{"REVENUE":1,"COST_OF_GOOD_SOLD":-1,"EXPENSE":-1,"OTHER_INCOME":1,"OTHER_EXPENSE":-1}}}].
-  Laba kotor = REVENUE - COST_OF_GOOD_SOLD; laba usaha = laba kotor - EXPENSE. Catatan penting: tanda angka untuk pendapatan dan HPP
-  sudah terbukti sesuai asumsi, tetapi untuk beban operasional, retur/diskon penjualan, dan pos di luar usaha BELUM diverifikasi
-  terhadap laporan resmi Accurate. Katakan itu kepada pengguna dan sarankan mencocokkan laba bersih dengan laporan Laba Rugi di Accurate.
+Laba rugi: accurate_get path "glaccount/get-pl-account-amount.do", query {"fromDate":"01/01/2021","toDate":"31/12/2021"}.
+- Jumlahkan HANYA baris dengan isParent = false (akun induk sudah berisi jumlah anak-anaknya; kalau ikut dijumlah, angka ganda).
+- Kelompokkan per accountType: REVENUE, COST_OF_GOOD_SOLD, EXPENSE, OTHER_INCOME, OTHER_EXPENSE.
+  Laba kotor = REVENUE - COST_OF_GOOD_SOLD; laba usaha = laba kotor - EXPENSE;
+  laba bersih = laba usaha + OTHER_INCOME - OTHER_EXPENSE.
+- Tanda angka untuk pendapatan dan HPP sudah terbukti sesuai asumsi, tetapi untuk beban operasional, retur/diskon penjualan,
+  dan pos di luar usaha BELUM diverifikasi terhadap laporan resmi Accurate. Katakan itu kepada pengguna dan sarankan
+  mencocokkan laba bersih dengan laporan Laba Rugi di Accurate.
 `.trim();
 
 // ---------------------------------------------------------------------------
 // Definisi MCP server + tools
 // ---------------------------------------------------------------------------
 function createMcpServer() {
-  const server = new McpServer({ name: "accurate-mcp", version: "0.3.0" }, { instructions: INSTRUCTIONS });
+  const server = new McpServer({ name: "accurate-mcp", version: "0.5.0" }, { instructions: INSTRUCTIONS });
 
   server.registerTool(
     "check_connection",
@@ -198,13 +203,13 @@ function createMcpServer() {
       title: "Lihat data dari Accurate (read-only)",
       description:
         "Memanggil satu endpoint BACA Accurate (HTTP GET), mis. 'sales-invoice/list.do' atau 'glaccount/mutation.do', untuk MELIHAT data. " +
-        "Untuk menghitung/merekap, gunakan accurate_aggregate. Hanya endpoint baca resmi (scope *_view) yang diizinkan. " +
+        "Untuk daftar panjang gunakan all_pages=true dan 'fields' seperlunya. Hanya endpoint baca resmi (scope *_view) yang diizinkan. " +
         "Cari endpoint dan parameternya dulu dengan search_endpoints.",
       inputSchema: {
         path: z.string().max(200).describe("Path endpoint, mis. 'sales-invoice/list.do'"),
         query: querySchema.describe("Query parameter, mis. {\"fields\":\"id,number\",\"filter.transDate.op\":\"BETWEEN\",...}"),
         all_pages: z.boolean().default(false).describe("Untuk endpoint list.do: ambil beberapa halaman sekaligus dan gabungkan"),
-        max_pages: z.number().int().min(1).max(20).default(5).describe("Batas halaman bila all_pages=true (100 baris/halaman)"),
+        max_pages: z.number().int().min(1).max(50).default(20).describe("Batas halaman bila all_pages=true (100 baris/halaman)"),
       },
       annotations: READ_ONLY,
     },
@@ -213,82 +218,22 @@ function createMcpServer() {
         const catalog = await getCatalog();
         const norm = assertAllowed(path, catalog);
         const q = sanitizeQuery(query);
-        if (!(all_pages && norm.endsWith("/list.do"))) return ok(await client.api(norm, q));
+        if (!(all_pages && norm.endsWith("/list.do"))) {
+          const body = await client.api(norm, q);
+          const sp = body?.sp;
+          if (sp?.pageCount > 1) {
+            body.CATATAN =
+              `Ini hanya halaman ${sp.page ?? 1} dari ${sp.pageCount} (${sp.rowCount ?? "?"} baris total). ` +
+              "Jangan dijumlahkan sebagai total; gunakan all_pages=true.";
+          }
+          return ok(body);
+        }
         const { rows, info } = await collectRows(fetchPage, norm, q, { maxPages: max_pages, allowPartial: true });
         return ok({
           s: true,
           d: rows,
           ...info,
           ...(info.lengkap ? {} : { PERINGATAN: "Data TIDAK lengkap atau bermasalah (lihat info di atas). Jangan dijumlahkan." }),
-        });
-      } catch (e) {
-        return fail(e);
-      }
-    }
-  );
-
-  server.registerTool(
-    "accurate_aggregate",
-    {
-      title: "Hitung dan rekap data Accurate (read-only)",
-      description:
-        "Mengambil SEMUA data dari satu endpoint baca Accurate (semua halaman), lalu memfilter, mengelompokkan, dan menghitung di kode " +
-        "dengan presisi tepat (tanpa selisih desimal): count, count_distinct, sum, avg, min, max. Cocok untuk rekap apa pun " +
-        "(per vendor, pelanggan, bulan, akun, laba rugi, dst.). Menolak data yang tidak lengkap atau duplikat, dan selalu melaporkan " +
-        "baris yang tidak ikut dihitung di 'peringatan'. Lihat petunjuk server untuk contoh.",
-      inputSchema: {
-        path: z.string().max(200).describe("Path endpoint baca, mis. 'purchase-invoice/list.do'"),
-        query: querySchema.describe("Parameter ke Accurate: wajib memuat 'fields' yang berisi semua field yang dipakai + 'id', plus filter tanggal bila perlu"),
-        where: z
-          .array(z.object({
-            field: z.string().max(80),
-            op: z.enum(["eq", "ne", "gt", "gte", "lt", "lte", "in", "contains"]),
-            value: z.union([scalar, z.array(scalar)]),
-          }))
-          .default([])
-          .describe("Filter tambahan di sisi server MCP (semua harus terpenuhi). Mis. isParent eq false"),
-        group_by: z
-          .array(z.union([
-            z.string().max(80),
-            z.object({ field: z.string().max(80), bucket: z.enum(["year", "month"]) }),
-          ]))
-          .default([])
-          .describe("Kelompokkan menurut field (boleh bertitik, mis. 'vendor.name') atau tanggal per 'month'/'year'"),
-        metrics: z
-          .array(z.object({
-            op: z.enum(["count", "count_distinct", "sum", "avg", "min", "max"]),
-            field: z.string().max(80).optional().describe("Wajib kecuali op=count"),
-            as: z.string().max(60).optional().describe("Nama hasil"),
-            signed_by: z
-              .object({
-                field: z.string().max(80),
-                map: z.record(z.number().int()),
-                default: z.number().int().optional(),
-              })
-              .optional()
-              .describe("Khusus sum: kalikan tiap nilai dengan bobot (mis. 1/-1/0) menurut nilai sebuah field, mis. tipe akun"),
-          }))
-          .default([{ op: "count" }]),
-        sort: z.object({ by: z.string().max(60), order: z.enum(["asc", "desc"]).optional() }).optional()
-          .describe("Urutan kelompok: by = nama metrik atau 'key'. Default: metrik pertama, terbesar dulu"),
-        limit: z.number().int().min(1).max(500).default(50).describe("Maks. kelompok ditampilkan ('total' tetap mencakup semuanya)"),
-        max_pages: z.number().int().min(1).max(50).default(20).describe("Batas halaman (100 baris/halaman)"),
-        allow_partial: z.boolean().default(false).describe("Izinkan data tidak lengkap. Hindari; hasil bisa menyesatkan"),
-      },
-      annotations: READ_ONLY,
-    },
-    async ({ path, query, where, group_by, metrics, sort, limit, max_pages, allow_partial }) => {
-      try {
-        const catalog = await getCatalog();
-        const norm = assertAllowed(path, catalog);
-        const q = sanitizeQuery(query);
-        const { rows, info } = await collectRows(fetchPage, norm, q, { maxPages: max_pages, allowPartial: allow_partial });
-        const hasil = aggregateRows(rows, { where, group_by, metrics, sort, limit });
-        return ok({
-          sumber: norm,
-          pengambilan_data: info,
-          ...hasil,
-          catatan: "Semua angka dihitung di kode (bilangan bulat, tanpa pembulatan desimal liar). Nilai pada 'peringatan' tidak ikut dihitung.",
         });
       } catch (e) {
         return fail(e);
