@@ -139,6 +139,28 @@ node --use-system-ca --env-file=.env server.js --stdio
 
 ---
 
+## 🐳 Menjalankan dengan Docker (otomatis jalan saat komputer hidup)
+
+```bash
+docker compose up -d --build
+```
+
+- Container `accurate-mcp` memakai `restart: unless-stopped`: otomatis jalan lagi setiap kali komputer/Docker Desktop hidup,
+  **kecuali** dihentikan manual. Pastikan Docker Desktop diatur *Start Docker Desktop when you sign in*.
+- Kredensial dibaca dari `.env` saat container dijalankan (tidak dimasukkan ke image). `.env` dibaca dengan `format: raw`
+  sehingga nilai yang mengandung `$` tidak terpotong.
+- Port mengikuti `PORT` di `.env` (mis. `3030`). Jangan jalankan `npm start` bersamaan di port yang sama.
+
+| Perintah | Fungsi |
+|---|---|
+| `docker compose stop` | Hentikan (tidak akan jalan otomatis sampai di-start lagi) |
+| `docker compose start` | Jalankan lagi |
+| `docker compose up -d --build` | Bangun ulang setelah kode atau `.env` diubah |
+| `docker compose logs -f` | Lihat log |
+| `docker compose down` | Hentikan dan hapus container |
+
+---
+
 ## 🔌 Konfigurasi Klien MCP
 
 Server ini menggunakan protokol standar MCP sehingga kompatibel dengan berbagai AI Agent / Client:

@@ -1,0 +1,18 @@
+# Jalankan: docker compose up -d --build
+# restart: unless-stopped -> otomatis jalan lagi saat komputer/Docker hidup kembali,
+# kecuali container dihentikan manual (docker compose stop / down).
+services:
+  accurate-mcp:
+    build: .
+    image: accurate-mcp:latest
+    container_name: accurate-mcp
+    restart: unless-stopped
+    # format raw: nilai dibaca apa adanya. Tanpa ini, tanda $ (mis. pada MCP_AUTH_TOKEN) dianggap variabel dan nilainya terpotong.
+    env_file:
+      - path: .env
+        format: raw
+    environment:
+      HOST: 0.0.0.0
+      PORT: ${PORT:-3030}
+    ports:
+      - "${PORT:-3030}:${PORT:-3030}"
